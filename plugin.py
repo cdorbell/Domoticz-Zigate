@@ -2,8 +2,9 @@
 #
 # Author: zaraki673
 #
+
 """
-<plugin key="ZigateUSB" name="Zigate plugin" author="zaraki673" version="1.0.7" wikilink="http://www.domoticz.com/wiki/plugins/zigate.html" externallink="https://www.zigate.fr/">
+<plugin key="Zigate" name="Zigate plugin" author="zaraki673" version="1.0.7" wikilink="http://www.domoticz.com/wiki/plugins/zigate.html" externallink="https://www.zigate.fr/">
 	<params>
 		<param field="Mode1" label="Type" width="75px">
 			<options>
@@ -23,6 +24,7 @@
 	</params>
 </plugin>
 """
+
 import Domoticz
 import binascii
 import time
@@ -31,7 +33,7 @@ class BasePlugin:
 	enabled = False
 
 	def __init__(self):
-		self.ListOfDevices = []
+		self.ListOfDevices = {}  # {DevicesAddresse : { status : status_de_detection, data : {ep list ou autres en fonctions du status}}, DevicesAddresse : ...}
 		return
 
 	def onStart(self):
@@ -41,6 +43,9 @@ class BasePlugin:
 		if Parameters["Mode6"] == "Debug":
 			Domoticz.Debugging(1)
 			DumpConfigToLog()
+			#Domoticz.Log("Debugger started, use 'telnet 0.0.0.0 4444' to connect")
+			#import rpdb
+			#rpdb.set_trace()
 		if Parameters["Mode1"] == "USB":
 			ZigateConn = Domoticz.Connection(Name="ZiGate", Transport="Serial", Protocol="None", Address=Parameters["SerialPort"], Baud=115200)
 			ZigateConn.Connect()
@@ -48,7 +53,13 @@ class BasePlugin:
 			ZigateConn = Domoticz.Connection(Name="Zigate", Transport="TCP/IP", Protocol="None ", Address=Parameters["Address"], Port=Parameters["Port"])
 			ZigateConn.Connect()
 		ReqRcv=''
-
+		for x in Devices : # initialise listeofdevices avec les devices en bases domoticz
+			ID = Devices[x].ID
+			Type = Devices[x].Type
+			SubType = Devices[x].SubType
+			self.ListOfDevices[ID][status]="inDB"
+			self.ListOfDevices[ID][Type]=Type
+			self.ListOfDevices[ID][SubType]=SubType
 
 	def onStop(self):
 		Domoticz.Log("onStop called")
@@ -74,11 +85,11 @@ class BasePlugin:
 			ReqRcv+=Tmprcv[:Tmprcv.find('03')+2] #
 			try :
 				if ReqRcv.find("0301") == -1 : #verifie si pas deux messages coller ensemble
-					ZigateDecode(ReqRcv) #demande de decodage de la trame recu
+					ZigateDecode(self, ReqRcv) #demande de decodage de la trame recu
 					ReqRcv=Tmprcv[Tmprcv.find('03')+2:]  # traite la suite du tampon
 				else : 
-					ZigateDecode(ReqRcv[:ReqRcv.find("0301")+2])
-					ZigateDecode(ReqRcv[ReqRcv.find("0301")+2:])
+					ZigateDecode(self, ReqRcv[:ReqRcv.find("0301")+2])
+					ZigateDecode(self, ReqRcv[ReqRcv.find("0301")+2:])
 					ReqRcv=Tmprcv[Tmprcv.find('03')+2:]
 			except :
 				Domoticz.Debug("onMessage - effacement de la trame suite a une erreur de decodage : " + ReqRcv)
@@ -94,12 +105,20 @@ class BasePlugin:
 		Domoticz.Log("onDisconnect called")
 
 	def onHeartbeat(self):
-#		Domoticz.Log("onHeartbeat called")
+		#Domoticz.Log("onHeartbeat called")
+		Domoticz.Debug("ListOfDevices : " + str(self.ListOfDevices))
+		for key in self.ListOfDevices :
+			status=self.ListOfDevices[key][status]
+			if status=="004d" :
+				sendZigateCmd("0045","0002", str(MsgSrcAddr))    # Envoi une demande Active Endpoint request
+				self.ListOfDevices[key][status]="0045"
+			
 		#ResetDevice("lumi.sensor_motion.aq2")
 		#ResetDevice("lumi.sensor_motion")
 		if (ZigateConn.Connected() != True):
 			ZigateConn.Connect()
 		return True
+
 
 global _plugin
 _plugin = BasePlugin()
@@ -148,6 +167,7 @@ def DumpConfigToLog():
 		Domoticz.Debug("Device options: " + str(Devices[x].options))
 	return
 
+
 def ZigateConf():
 
 	################### ZiGate - set channel 11 ##################
@@ -162,7 +182,7 @@ def ZigateConf():
 	################### ZiGate - discover mode 255sec ##################
 	sendZigateCmd("0049","0004","FFFCFE00")
 
-def ZigateDecode(Data):  # supprime le transcodage
+def ZigateDecode(self, Data):  # supprime le transcodage
 	Domoticz.Debug("ZigateDecode - decodind data : " + Data)
 	Out=""
 	Outtmp=""
@@ -184,7 +204,7 @@ def ZigateDecode(Data):  # supprime le transcodage
 				else :
 					Out+=Outtmp
 			Outtmp=""
-	ZigateRead(Out)
+	ZigateRead(self, Out)
 
 def ZigateEncode(Data):  # ajoute le transcodage
 	Domoticz.Debug("ZigateDecode - Encodind data : " + Data)
@@ -208,7 +228,7 @@ def ZigateEncode(Data):  # ajoute le transcodage
 	Domoticz.Debug("Transcode in : " + str(Data) + "  / out :" + str(Out) )
 	return Out
 
-def sendZigateCmd(cmd,length,datas) :
+def sendZigateCmd(cmd,length,datas) :  ### ATTENTION SI CHECKSUM < 10 VALEUR RETOURNE SUR 4BIT AU LIEU DE 8
 	if datas =="" :
 		lineinput="01" + str(ZigateEncode(cmd)) + str(ZigateEncode(length)) + str(getChecksum(cmd,length,"0")) + "03" 
 	else :
@@ -219,9 +239,7 @@ def sendZigateCmd(cmd,length,datas) :
 	if Parameters["Mode1"] == "Wifi":
 		ZigateConn.Send(bytes.fromhex(str(lineinput))+bytes("\r\n",'utf-8'))
 
-
-	
-def ZigateRead(Data):
+def ZigateRead(self, Data):
 	Domoticz.Debug("ZigateRead - decoded data : " + Data)
 	MsgType=Data[2:6]
 	MsgData=Data[12:len(Data)-4]
@@ -232,18 +250,18 @@ def ZigateRead(Data):
 
 	if str(MsgType)=="004d":  # Device announce
 		Domoticz.Debug("ZigateRead - MsgType 004d - Reception Device announce ")
-		Decode004d(MsgData)
+		Decode004d(self, MsgData)
 		
 	elif str(MsgType)=="00d1":  #
 		Domoticz.Debug("ZigateRead - MsgType 00d1 - Reception Touchlink status : " + Data)
 
 	elif str(MsgType)=="8000":  # Status
 		Domoticz.Debug("ZigateRead - MsgType 8000 - reception status ")
-		Decode8000(MsgData)
+		Decode8000(self, MsgData)
 
 	elif str(MsgType)=="8001":  # Log
 		Domoticz.Debug("ZigateRead - MsgType 8001 - Reception log Level ")
-		Decode8001(MsgData)
+		Decode8001(self, MsgData)
 
 	elif str(MsgType)=="8002":  #
 		Domoticz.Debug("ZigateRead - MsgType 8002 - Reception Data indication : " + Data)
@@ -265,7 +283,7 @@ def ZigateRead(Data):
 
 	elif str(MsgType)=="8010":  # Version
 		Domoticz.Debug("ZigateRead - MsgType 8010 - Reception Version list : " + Data)
-		Decode8010(MsgData)
+		Decode8010(self, MsgData)
 
 	elif str(MsgType)=="8014":  #
 		Domoticz.Debug("ZigateRead - MsgType 8014 - Reception Permit join status response : " + Data)
@@ -305,14 +323,14 @@ def ZigateRead(Data):
 
 	elif str(MsgType)=="8043":  # Simple Descriptor Response
 		Domoticz.Debug("ZigateRead - MsgType 8043 - Reception Simple descriptor response " + Data)
-		Decode8043(MsgData)
+		Decode8043(self, MsgData)
 
 	elif str(MsgType)=="8044":  #
 		Domoticz.Debug("ZigateRead - MsgType 8044 - Reception Power descriptor response : " + Data)
 
 	elif str(MsgType)=="8045":  # Active Endpoints Response
 		Domoticz.Debug("ZigateRead - MsgType 8045 - Reception Active endpoint response : " + Data)
-		Decode8045(MsgData)
+		Decode8045(self, MsgData)
 
 	elif str(MsgType)=="8046":  #
 		Domoticz.Debug("ZigateRead - MsgType 8046 - Reception Match descriptor response : " + Data)
@@ -367,11 +385,11 @@ def ZigateRead(Data):
 
 	elif str(MsgType)=="8101":  # Default Response
 		Domoticz.Debug("ZigateRead - MsgType 8101 - Default Response")
-		Decode8101(MsgData)
+		Decode8101(self, MsgData)
 
 	elif str(MsgType)=="8102":  # Report Individual Attribute response
 		Domoticz.Debug("ZigateRead - MsgType 8102 - Report Individual Attribute response")	
-		Decode8102(MsgData)
+		Decode8102(self, MsgData)
 		
 	elif str(MsgType)=="8110":  #
 		Domoticz.Debug("ZigateRead - MsgType 8110 - Reception Write attribute response : " + Data)
@@ -384,29 +402,30 @@ def ZigateRead(Data):
 
 	elif str(MsgType)=="8401":  # Reception Zone status change notification
 		Domoticz.Debug("ZigateRead - MsgType 8401 - Reception Zone status change notification : " + Data)
-		Decode8401(MsgData)
+		Decode8401(self, MsgData)
 
 	elif str(MsgType)=="8701":  # 
 		Domoticz.Debug("ZigateRead - MsgType 8701 - Reception Router discovery confirm : " + Data)
 
 	elif str(MsgType)=="8702":  # APS Data Confirm Fail
 		Domoticz.Debug("ZigateRead - MsgType 8702 -  Reception APS Data confirm fail : Status : " + MsgDataStatus + ", Source Ep : " + MsgDataSrcEp + ", Destination Ep : " + MsgDataDestEp + ", Destination Mode : " + MsgDataDestMode + ", Destination Address : " + MsgDataDestAddr + ", SQN : " + MsgDataSQN)
-		Decode8702(MsgData)
+		Decode8702(self, MsgData)
 
 	else: # unknow or not dev function
 		Domoticz.Debug("ZigateRead - Unknow Message Type " + MsgType)
 
-def Decode004d(MsgData) : # Reception Device announce
+def Decode004d(self, MsgData) : # Reception Device announce
 	MsgSrcAddr=MsgData[0:4]
 	MsgIEEE=MsgData[4:20]
 	MsgMacCapa=MsgData[20:22]
 	Domoticz.Debug("Decode004d - Reception Device announce : Source :" + MsgSrcAddr + ", IEEE : "+ MsgIEEE + ", Mac capa : " + MsgMacCapa)
 	# tester si le device existe deja dans la base domoticz
-	if DeviceExist(MsgSrcAddr)==false :
-		
-		sendZigateCmd("0045","0002", str(MsgSrcAddr))    # Envoie une demande Active Endpoint request
+	if DeviceExist(self, MsgSrcAddr)==False :
+		self.ListOfDevices[MsgSrcAddr]={}
+		self.ListOfDevices[MsgSrcAddr]['status']="004d"
+		self.ListOfDevices[MsgSrcAddr]['data']={}
 
-def Decode8000(MsgData) : # Reception status
+def Decode8000(self, MsgData) : # Reception status
 	MsgDataLenght=MsgData[0:4]
 	MsgDataStatus=MsgData[4:6]
 	if MsgDataStatus=="00" :
@@ -430,17 +449,17 @@ def Decode8000(MsgData) : # Reception status
 		MsgDataMessage=""
 	Domoticz.Debug("Decode8000 - Reception status : " + MsgDataStatus + ", SQN : " + MsgDataSQN + ", Message : " + MsgDataMessage)
 
-def Decode8001(MsgData) : # Reception log Level
+def Decode8001(self, MsgData) : # Reception log Level
 	MsgLogLvl=MsgData[0:2]
 	MsgDataMessage=MsgData[2:len(MsgData)]
 	Domoticz.Debug("ZigateRead - MsgType 8001 - Reception log Level 0x: " + MsgLogLvl + "Message : " + MsgDataMessage)
 
-def Decode8010(MsgData) : # Reception Version list
+def Decode8010(self,MsgData) : # Reception Version list
 	MsgDataApp=MsgData[0:4]
 	MsgDataSDK=MsgData[4:8]
 	Domoticz.Debug("Decode8010 - Reception Version list : " + MsgData)
 	
-def Decode8043(MsgData) : # Reception Simple descriptor response
+def Decode8043(self, MsgData) : # Reception Simple descriptor response
 	MsgDataSQN=MsgData[0:2]
 	MsgDataStatus=MsgData[2:4]
 	MsgDataShAddr=MsgData[4:8]
@@ -449,22 +468,25 @@ def Decode8043(MsgData) : # Reception Simple descriptor response
 			# MsgDataEp=MsgData[8:10]
 	Domoticz.Debug("Decode8043 - Reception Simple descriptor response : SQN : " + MsgDataSQN + ", Status " + MsgDataStatus + ", short Addr " + MsgDataShAddr + ", Lenght " + MsgDataLenght)
 
-def Decode8045(MsgData) : # Reception Active endpoint response
+def Decode8045(self, MsgData) : # Reception Active endpoint response
 	MsgDataSQN=MsgData[0:2]
 	MsgDataStatus=MsgData[2:4]
 	MsgDataShAddr=MsgData[4:8]
 	MsgDataEpCount=MsgData[8:10]
 	MsgDataEPlist=MsgData[10:len(MsgData)]
 	Domoticz.Debug("Decode8045 - Reception Active endpoint response : SQN : " + MsgDataSQN + ", Status " + MsgDataStatus + ", short Addr " + MsgDataShAddr + ", EP count " + MsgDataEpCount + ", Ep list " + MsgDataEPlist)
-	#OutEPlist=""
-	#for i in MsgDataEPlist :
-	#	OutEPlist+=i
-	#	if len(OutEPlist)==2 :
-	#		Domoticz.Debug("Envoie une demande Simple Descriptor request pour avoir les informations du EP :" + OutEPlist + ", du device adresse : " + MsgDataShAddr)
-	#		sendZigateCmd("0043","0004", str(MsgDataShAddr)+str(OutEPlist))    # Envoie une demande Simple Descriptor request pour avoir les informations du EP
-	#		OutEPlisttmp=""
+	OutEPlist=""
+	for i in MsgDataEPlist :
+		OutEPlist+=i
+		if len(OutEPlist)==2 :
+			self.ListOfDevices[MsgDataShAddr]['status']="8045"
+			self.ListOfDevices[MsgDataShAddr]['data']={}
+			self.ListOfDevices[MsgDataShAddr]['data'][OutEPlist]=""
+			Domoticz.Debug("Envoie une demande Simple Descriptor request pour avoir les informations du EP :" + OutEPlist + ", du device adresse : " + MsgDataShAddr)
+			#sendZigateCmd("0043","0004", str(MsgDataShAddr)+str(OutEPlist))    # Envoie une demande Simple Descriptor request pour avoir les informations du EP
+			OutEPlisttmp=""
 	
-def Decode8101(MsgData) :  # Default Response
+def Decode8101(self, MsgData) :  # Default Response
 	MsgDataSQN=MsgData[0:2]
 	MsgDataEp=MsgData[2:4]
 	MsgClusterId=MsgData[4:8]
@@ -472,7 +494,7 @@ def Decode8101(MsgData) :  # Default Response
 	MsgDataStatus=MsgData[10:12]
 	Domoticz.Debug("Decode8101 - reception Default response : SQN : " + MsgDataSQN + ", EP : " + MsgDataEp + ", Cluster ID : " + MsgClusterId + " , Command : " + MsgDataCommand+ ", Status : " + MsgDataStatus)
 
-def Decode8102(MsgData) :  # Report Individual Attribute response
+def Decode8102(self, MsgData) :  # Report Individual Attribute response
 	MsgSQN=MsgData[0:2]
 	MsgSrcAddr=MsgData[2:6]
 	MsgSrcEp=MsgData[6:8]
@@ -481,9 +503,14 @@ def Decode8102(MsgData) :  # Report Individual Attribute response
 	MsgAttType=MsgData[16:20]
 	MsgAttSize=MsgData[20:24]
 	MsgClusterData=MsgData[24:len(MsgData)]
-	Domoticz.Debug("Decode8102 - reception data : " + Data + " ClusterID : " + MsgClusterId + " Attribut ID : " + MsgAttrID + " Src Addr : " + MsgSrcAddr + " Scr Ep: " + MsgSrcEp)	
+	Domoticz.Debug("Decode8102 - reception data : " + MsgClusterData + " ClusterID : " + MsgClusterId + " Attribut ID : " + MsgAttrID + " Src Addr : " + MsgSrcAddr + " Scr Ep: " + MsgSrcEp)	
+	if DeviceExist(self, MsgSrcAddr)==False :
+		self.ListOfDevices[MsgSrcAddr]={}
+		self.ListOfDevices[MsgSrcAddr]['status']="004d"
+		self.ListOfDevices[MsgSrcAddr]['data']={}
+		#sendZigateCmd("0045","0002", str(MsgSrcAddr))    # Envoi une demande Active Endpoint request
 
-def Decode8702(MsgData) : # Reception APS Data confirm fail
+def Decode8702(self, MsgData) : # Reception APS Data confirm fail
 	MsgDataStatus=MsgData[0:2]
 	MsgDataSrcEp=MsgData[2:4]
 	MsgDataDestEp=MsgData[4:6]
@@ -589,12 +616,11 @@ def Decode8702(MsgData) : # Reception APS Data confirm fail
 	
 		Domoticz.Debug("ZigateRead - MsgType 8102 - Error/unknow Cluster Message : " + MsgClusterId)
 
-def Decode8401(MsgData) : # Reception Zone status change notification
+def Decode8401(self, MsgData) : # Reception Zone status change notification
 	Domoticz.Debug("Decode8401 - Reception Zone status change notification : " + MsgData)
 	MsgSrcAddr=MsgData[10:14]
 	MsgSrcEp=MsgData[2:4]
 	MsgClusterData=MsgData[16:18]
-	MajDomoDevice(MsgSrcAddr,MsgSrcEp,"Switch",MsgClusterData)
 		
 def CreateDomoDevice(nbrdevices,Addr,Ep,Type) :
 	DeviceID=Addr #int(Addr,16)
@@ -889,9 +915,13 @@ def ResetDevice(Type) :
 		except :
 			return
 			
-def DeviceExist(Addr) :
-	
-	
+def DeviceExist(self, Addr) :
+	#check in ListOfDevices
+	try :
+		status=self.ListOfDevices[Addr][status]
+		return True
+	except :  # devices inconnu ds listofdevices et ds db
+		return False
 
 def getChecksum(msgtype,length,datas) :
 	temp = 0 ^ int(msgtype[0:2],16) 
@@ -919,14 +949,10 @@ def UpdateBattery(DeviceID,BatteryLvl):
 	#####################################################################################################################
 
 def UpdateDevice(Unit, nValue, sValue):
-    # Make sure that the Domoticz device still exists (they can be deleted) before updating it 
-    if (Unit in Devices):
-        if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
-            Devices[Unit].Update(nValue=nValue, sValue=str(sValue))
-            Domoticz.Log("Update "+str(nValue)+":'"+str(sValue)+"' ("+Devices[Unit].Name+")")
-    return
-
-
-
-	
+	# Make sure that the Domoticz device still exists (they can be deleted) before updating it 
+	if (Unit in Devices):
+		if (Devices[Unit].nValue != nValue) or (Devices[Unit].sValue != sValue):
+			Devices[Unit].Update(nValue=nValue, sValue=str(sValue))
+			Domoticz.Log("Update "+str(nValue)+":'"+str(sValue)+"' ("+Devices[Unit].Name+")")
+	return		
 
