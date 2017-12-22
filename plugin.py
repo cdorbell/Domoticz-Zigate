@@ -314,7 +314,7 @@ def ZigateRead(self, Data):
 		return
 
 	elif str(MsgType)=="8006":  #
-		Domoticz.Debug("ZigateRead - MsgType 8006 - Reception Non factory new restart : " + Data)$
+		Domoticz.Debug("ZigateRead - MsgType 8006 - Reception Non factory new restart : " + Data)
 		return
 
 	elif str(MsgType)=="8007":  #
