@@ -1,0 +1,1 @@
+{'1c96': {'Data': {'01': {'0402', '0000', '0405'}}, 'Model': 'lumi.sensor_ht', 'Type' : 'Temp/hum'}}

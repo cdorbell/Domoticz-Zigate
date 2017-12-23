@@ -1,0 +1,4 @@
+{
+'lumi.weather' : {'Data' : {'01': {'0402', '0405', '0403'}},'Type' : 'Temp/hum/baro'},
+'lumi.sensor_ht' : {'Data' : {'01': {'0402', '0405'}},'Type' : 'Temp/hum'}
+}
