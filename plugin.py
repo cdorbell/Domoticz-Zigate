@@ -128,19 +128,19 @@ class BasePlugin:
 				self.ListOfDevices[key]['Status']="0043"
 				self.ListOfDevices[key]['Heartbeat']="0"
 		
-			if (RIA>=10 or int(self.ListOfDevices[key]['Heartbeat'])>=15 ) and status != "inDB" :
+			if RIA>=10 and status != "inDB" :
 				#creer le device ds domoticz en se basant sur le clusterID ou le Model si il est connu
 				if self.ListOfDevices[key]['Model']!={} :
 					if self.ListOfDevices[key]['Model'] in self.DeviceConf : # verifie que le model existe ds le fichier de conf des models
-						infoconf=self.DeviceConf[self.ListOfDevices[key]['Model']]
-						for Ep in infoconf :
+						Modeltmp=str(self.ListOfDevices[key]['Model'])
+						for Ep in self.DeviceConf[Modeltmp]['Ep'] :
 							if Ep in self.ListOfDevices[key]['Ep'] :
-								for cluster in infoconf[Ep] :
+								for cluster in self.DeviceConf[Modeltmp]['Ep'][Ep] :
 									if cluster not in self.ListOfDevices[key]['Ep'][Ep] :
 										self.ListOfDevices[key]['Ep'][Ep][cluster]={}
 							else :
 								self.ListOfDevices[key]['Ep'][Ep]={}
-								for cluster in infoconf[Ep] :
+								for cluster in self.DeviceConf[Modeltmp]['Ep'][Ep] :
 									self.ListOfDevices[key]['Ep'][Ep][cluster]={}
 						self.ListOfDevices[key]['Type']=self.DeviceConf[self.ListOfDevices[key]['Model']]['Type']
 						IsCreated=False
