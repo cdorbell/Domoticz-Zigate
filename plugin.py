@@ -59,12 +59,12 @@ class BasePlugin:
 			self.ListOfDevices[ID]=Devices[x].Options[Zigate]
 		
 		#Import DeviceConf.txt
-		with open('DeviceConf.txt', 'r') as myfile:
+		with open(Parameters["HomeFolder"]+"DeviceConf.txt", 'r') as myfile:
 			self.DeviceConf=myfile.read().replace('\n', '')
 			Domoticz.Debug("DeviceConf.txt = " + str(self.DeviceConf))
 		#Import ManualImport.txt
-		with open('ManualImport.txt', 'r') as myfile:
-			self.ManualImport=myfile.read().replace('\n', '')
+		with open(Parameters["HomeFolder"]+"ManualImport.txt", 'r') as myfile2:
+			self.ManualImport=myfile2.read().replace('\n', '')
 			Domoticz.Debug("ManualImport.txt = " + str(self.ManualImport))
 			
 	def onStop(self):
@@ -128,7 +128,7 @@ class BasePlugin:
 				self.ListOfDevices[key]['Status']="0043"
 				self.ListOfDevices[key]['Heartbeat']="0"
 		
-			if RIA>=10 and status != "inDB" :
+			if (RIA>=10 or int(self.ListOfDevices[key]['Heartbeat'])>=15 ) and status != "inDB" :
 				#creer le device ds domoticz en se basant sur le clusterID ou le Model si il est connu
 				if self.ListOfDevices[key]['Model']!={} :
 					if self.ListOfDevices[key]['Model'] in self.DeviceConf : # verifie que le model existe ds le fichier de conf des models
@@ -142,20 +142,20 @@ class BasePlugin:
 								self.ListOfDevices[key]['Ep'][Ep]={}
 								for cluster in infoconf[Ep] :
 									self.ListOfDevices[key]['Ep'][Ep][cluster]={}
-				for ep in self.ListOfDevices[key]['Ep'] :
-					IsCreated=False
-					x=0
-					nbrdevices=0
-					for x in Devices:
-						if Devices[x].DeviceID == str(key) :
-							IsCreated = True
-							Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
+						self.ListOfDevices[key]['Type']=self.DeviceConf[self.ListOfDevices[key]['Model']]['Type']
+						IsCreated=False
+						x=0
+						nbrdevices=0
+						for x in Devices:
+							if Devices[x].DeviceID == str(key) :
+								IsCreated = True
+								Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
+							if IsCreated == False :
+								nbrdevices=x
 						if IsCreated == False :
-							nbrdevices=x
-					if IsCreated == False :
-						nbrdevices=nbrdevices+1
-						Domoticz.Debug("HearBeat - creating device id : " + str(key))
-						CreateDomoDevice(self, nbrdevices, key, ep)
+							nbrdevices=nbrdevices+1
+							Domoticz.Debug("HearBeat - creating device id : " + str(key))
+							CreateDomoDevice(self, nbrdevices, key, ep)
 		#ResetDevice("lumi.sensor_motion.aq2")
 		#ResetDevice("lumi.sensor_motion")
 		if (ZigateConn.Connected() != True):
@@ -683,7 +683,7 @@ def CreateDomoDevice(self, nbrdevices, Addr, Ep) :
 		typename="Switch"
 		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=73 , Switchtype=5 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
 
-	if Type=="Lux_" :  # Lux sensors 
+	if Type=="Lumi" :  # Lux sensors 
 		typename="Lux"
 		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=246, Subtype=1 , Switchtype=0 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
 
@@ -1117,7 +1117,7 @@ def GetType(self, Addr, Ep) :
 			if cluster=="0406" :
 				Type+="Occu"
 			if cluster=="0400" :
-				Type+="Lux_"
+				Type+="Lumi"
 			if cluster=="0012" or cluster=="000c" :
 				Type+="XCub"
 			if cluster=="0403" :
@@ -1127,6 +1127,7 @@ def GetType(self, Addr, Ep) :
 			if cluster=="0006" :
 				Type+="SSwi"
 			Type+="/"
+		self.DeviceConf[self.ListOfDevices[Addr]['Model']]['Type']=Type
 	return Type
 			
 			
