@@ -4,7 +4,7 @@
 #
 
 """
-<plugin key="Zigate" name="Zigate plugin" author="zaraki673" version="1.0.7" wikilink="http://www.domoticz.com/wiki/plugins/zigate.html" externallink="https://www.zigate.fr/">
+<plugin key="Zigate" name="Zigate plugin" author="zaraki673" version="1.2.0" wikilink="http://www.domoticz.com/wiki/plugins/zigate.html" externallink="https://www.zigate.fr/">
 	<params>
 		<param field="Mode1" label="Type" width="75px">
 			<options>
@@ -15,6 +15,13 @@
 		<param field="Address" label="IP" width="150px" required="true" default="0.0.0.0"/>
 		<param field="Port" label="Port" width="150px" required="true" default="9999"/>
 		<param field="SerialPort" label="Serial Port" width="150px" required="true" default="/dev/ttyUSB0"/>
+		<param field="Mode2" label="Duree association (entre 0 et 255) au demarrage : " width="75px" required="true" default="254" />
+		<param field="Mode3" label="Full reset ( !!! réassociation de tous les devices obligatoirs !!! ): " width="75px">
+			<options>
+				<option label="True" value="True"/>
+				<option label="False" value="False"  default="true" />
+			</options>
+		</param>
 		<param field="Mode6" label="Debug" width="75px">
 			<options>
 				<option label="True" value="Debug"/>
@@ -76,6 +83,9 @@ class BasePlugin:
 		if (Status == 0):
 			isConnected = True
 			Domoticz.Log("Connected successfully")
+			if Parameters["Mode3"] == "True":
+			################### ZiGate - ErasePD ##################
+				sendZigateCmd("0012","0000", "")
 			ZigateConf()
 		else:
 			Domoticz.Log("Failed to connect ("+str(Status)+")")
@@ -223,7 +233,7 @@ def ZigateConf():
 	sendZigateCmd("0024","0000","")
 
 	################### ZiGate - discover mode 255sec ##################
-	sendZigateCmd("0049","0004","FFFCFE00")
+	sendZigateCmd("0049","0004","FFFC" + hex(int(Parameters["Mode2"]))[2:4] + "00")
 
 def ZigateDecode(self, Data):  # supprime le transcodage
 	Domoticz.Debug("ZigateDecode - decodind data : " + Data)
@@ -579,7 +589,7 @@ def Decode8045(self, MsgData) : # Reception Active endpoint response
 	MsgDataEPlist=MsgData[10:len(MsgData)]
 	Domoticz.Debug("Decode8045 - Reception Active endpoint response : SQN : " + MsgDataSQN + ", Status " + MsgDataStatus + ", short Addr " + MsgDataShAddr + ", EP count " + MsgDataEpCount + ", Ep list " + MsgDataEPlist)
 	OutEPlist=""
-	if DeviceExist(self, MsgSrcAddr)==False :
+	if DeviceExist(self, MsgDataShAddr)==False :
 		if self.ListOfDevices[MsgDataShAddr]['Status']!="inDB" :
 			self.ListOfDevices[MsgDataShAddr]['Status']="8045"
 		for i in MsgDataEPlist :
