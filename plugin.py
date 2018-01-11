@@ -16,7 +16,7 @@
 		<param field="Port" label="Port" width="150px" required="true" default="9999"/>
 		<param field="SerialPort" label="Serial Port" width="150px" required="true" default="/dev/ttyUSB0"/>
 		<param field="Mode2" label="Duree association (entre 0 et 255) au demarrage : " width="75px" required="true" default="254" />
-		<param field="Mode3" label="Full reset ( !!! réassociation de tous les devices obligatoirs !!! ): " width="75px">
+		<param field="Mode3" label="Erase Persistent Data ( !!! réassociation de tous les devices obligatoirs !!! ): " width="75px">
 			<options>
 				<option label="True" value="True"/>
 				<option label="False" value="False"  default="true" />
@@ -61,18 +61,20 @@ class BasePlugin:
 			ZigateConn.Connect()
 		ReqRcv=''
 		for x in Devices : # initialise listeofdevices avec les devices en bases domoticz
-			ID = Devices[x].ID
+			ID = Devices[x].DeviceID
 			self.ListOfDevices[ID]={}
-			self.ListOfDevices[ID]=Devices[x].Options[Zigate]
+			self.ListOfDevices[ID]=eval(Devices[x].Options['Zigate'])
 		
 		#Import DeviceConf.txt
 		with open(Parameters["HomeFolder"]+"DeviceConf.txt", 'r') as myfile:
-			self.DeviceConf=myfile.read().replace('\n', '')
+			tmpread=myfile.read().replace('\n', '')
+			self.DeviceConf=eval(tmpread)
 			Domoticz.Debug("DeviceConf.txt = " + str(self.DeviceConf))
-		#Import ManualImport.txt
-		with open(Parameters["HomeFolder"]+"ManualImport.txt", 'r') as myfile2:
-			self.ManualImport=myfile2.read().replace('\n', '')
-			Domoticz.Debug("ManualImport.txt = " + str(self.ManualImport))
+		#Import DeviceList.txt
+		with open(Parameters["HomeFolder"]+"DeviceList.txt", 'r') as myfile2:
+			tmpread2=myfile2.read().replace('\n', '')
+			self.DeviceList=eval(tmpread2)
+			Domoticz.Debug("DeviceList.txt = " + str(eval(tmpread2)))
 			
 	def onStop(self):
 		Domoticz.Log("onStop called")
@@ -118,6 +120,9 @@ class BasePlugin:
 		Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
 
 	def onDisconnect(self, Connection):
+		with open(Parameters["HomeFolder"]+"DeviceList.txt", 'w') as myfile2:
+			myfile2.write(self.ListOfDevices)
+			Domoticz.Debug("Write DeviceList.txt = " + str(self.ListOfDevices))
 		Domoticz.Log("onDisconnect called")
 
 	def onHeartbeat(self):
@@ -127,45 +132,57 @@ class BasePlugin:
 			status=self.ListOfDevices[key]['Status']
 			RIA=int(self.ListOfDevices[key]['RIA'])
 			self.ListOfDevices[key]['Heartbeat']=str(int(self.ListOfDevices[key]['Heartbeat'])+1)
-			if status=="004d" and self.ListOfDevices[key]['Heartbeat']=="10":
-				sendZigateCmd("0045","0002", str(key))    # Envoi une demande Active Endpoint request
+			# Envoi une demande Active Endpoint request
+			if status=="004d" and self.ListOfDevices[key]['Heartbeat']=="1":
+				sendZigateCmd("0045","0002", str(key))
 				self.ListOfDevices[key]['Status']="0045"
 				self.ListOfDevices[key]['Heartbeat']="0"
-			if status=="8045" and self.ListOfDevices[key]['Heartbeat']=="10":
+			if status=="004d" and self.ListOfDevices[key]['Heartbeat']>="10":
+				self.ListOfDevices[key]['Heartbeat']="0"
+			if status=="0045" and self.ListOfDevices[key]['Heartbeat']>="10":
+				self.ListOfDevices[key]['Heartbeat']="0"
+				self.ListOfDevices[key]['Status']="004d"
+			# Envoie une demande Simple Descriptor request par EP
+			if status=="8045" and self.ListOfDevices[key]['Heartbeat']=="1":
 				for cle in self.ListOfDevices[key]['Ep']:
 					Domoticz.Debug("Envoie une demande Simple Descriptor request pour avoir les informations du EP :" + cle + ", du device adresse : " + key)
-					sendZigateCmd("0043","0004", str(key)+str(cle))    # Envoie une demande Simple Descriptor request
+					sendZigateCmd("0043","0004", str(key)+str(cle))
 				self.ListOfDevices[key]['Status']="0043"
 				self.ListOfDevices[key]['Heartbeat']="0"
+			if status=="8045" and self.ListOfDevices[key]['Heartbeat']>="10":
+				self.ListOfDevices[key]['Heartbeat']="0"
+			if status=="0043" and self.ListOfDevices[key]['Heartbeat']>="10":
+				self.ListOfDevices[key]['Heartbeat']="0"
+				self.ListOfDevices[key]['Status']="8045"
 		
-			if RIA>=10 and status != "inDB" :
-				#creer le device ds domoticz en se basant sur le clusterID ou le Model si il est connu
-				if self.ListOfDevices[key]['Model']!={} :
-					if self.ListOfDevices[key]['Model'] in self.DeviceConf : # verifie que le model existe ds le fichier de conf des models
-						Modeltmp=str(self.ListOfDevices[key]['Model'])
-						for Ep in self.DeviceConf[Modeltmp]['Ep'] :
-							if Ep in self.ListOfDevices[key]['Ep'] :
-								for cluster in self.DeviceConf[Modeltmp]['Ep'][Ep] :
-									if cluster not in self.ListOfDevices[key]['Ep'][Ep] :
-										self.ListOfDevices[key]['Ep'][Ep][cluster]={}
-							else :
-								self.ListOfDevices[key]['Ep'][Ep]={}
-								for cluster in self.DeviceConf[Modeltmp]['Ep'][Ep] :
+			if (RIA>=10 and status != "inDB") :
+				#creer le device ds domoticz en se basant sur les clusterID ou le Model si il est connu
+				#if self.ListOfDevices[key]['Model']!={} :
+				if self.ListOfDevices[key]['Model']!= {} and self.ListOfDevices[key]['Model'] in self.DeviceConf : # verifie que le model existe ds le fichier de conf des models
+					Modeltmp=str(self.ListOfDevices[key]['Model'])
+					Domoticz.Debug(str(self.DeviceConf[Modeltmp]['Ep']))
+					for Ep in self.DeviceConf[Modeltmp]['Ep'] :
+						if Ep in self.ListOfDevices[key]['Ep'] :
+							for cluster in self.DeviceConf[Modeltmp]['Ep'][Ep] :
+								if cluster not in self.ListOfDevices[key]['Ep'][Ep] :
 									self.ListOfDevices[key]['Ep'][Ep][cluster]={}
-						self.ListOfDevices[key]['Type']=self.DeviceConf[self.ListOfDevices[key]['Model']]['Type']
-						IsCreated=False
-						x=0
-						nbrdevices=0
-						for x in Devices:
-							if Devices[x].DeviceID == str(key) :
-								IsCreated = True
-								Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
-							if IsCreated == False :
-								nbrdevices=x
-						if IsCreated == False :
-							nbrdevices=nbrdevices+1
-							Domoticz.Debug("HearBeat - creating device id : " + str(key))
-							CreateDomoDevice(self, nbrdevices, key, ep)
+						else :
+							self.ListOfDevices[key]['Ep'][Ep]={}
+							for cluster in self.DeviceConf[Modeltmp]['Ep'][Ep] :
+								self.ListOfDevices[key]['Ep'][Ep][cluster]={}
+					self.ListOfDevices[key]['Type']=self.DeviceConf[Modeltmp]['Type']
+
+
+				IsCreated=False
+				x=0
+				nbrdevices=0
+				for x in Devices:
+					if Devices[x].DeviceID == str(key) :
+						IsCreated = True
+						Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
+				if IsCreated == False :
+					Domoticz.Debug("HearBeat - creating device id : " + str(key))
+					CreateDomoDevice(self, key)
 		#ResetDevice("lumi.sensor_motion.aq2")
 		#ResetDevice("lumi.sensor_motion")
 		if (ZigateConn.Connected() != True):
@@ -217,14 +234,14 @@ def DumpConfigToLog():
 		Domoticz.Debug("Device nValue:	" + str(Devices[x].nValue))
 		Domoticz.Debug("Device sValue:   '" + Devices[x].sValue + "'")
 		Domoticz.Debug("Device LastLevel: " + str(Devices[x].LastLevel))
-		Domoticz.Debug("Device options: " + str(Devices[x].options))
+		Domoticz.Debug("Device options: " + str(Devices[x].Options))
 	return
 
 
 def ZigateConf():
 
 	################### ZiGate - set channel 11 ##################
-	sendZigateCmd("0021","0004", "00000800")
+	sendZigateCmd("0021","0004", "00000B00")
 
 	################### ZiGate - Set Type COORDINATOR#################
 	sendZigateCmd("0023","0001","00")
@@ -537,6 +554,7 @@ def Decode004d(self, MsgData) : # Reception Device announce
 	# tester si le device existe deja dans la base domoticz
 	if DeviceExist(self, MsgSrcAddr)==False :
 		self.ListOfDevices[MsgSrcAddr]['MacCapa']=MsgMacCapa
+		self.ListOfDevices[MsgSrcAddr]['IEEE']=MsgIEEE
 
 def Decode8000(self, MsgData) : # Reception status
 	MsgDataLenght=MsgData[0:4]
@@ -577,9 +595,38 @@ def Decode8043(self, MsgData) : # Reception Simple descriptor response
 	MsgDataStatus=MsgData[2:4]
 	MsgDataShAddr=MsgData[4:8]
 	MsgDataLenght=MsgData[8:10]
-		# if int(MsgDataLenght,16)>0 :
-			# MsgDataEp=MsgData[8:10]
-	Domoticz.Debug("Decode8043 - Reception Simple descriptor response : SQN : " + MsgDataSQN + ", Status " + MsgDataStatus + ", short Addr " + MsgDataShAddr + ", Lenght " + MsgDataLenght)
+	Domoticz.Debug("Decode8043 - Reception Simple descriptor response : SQN : " + MsgDataSQN + ", Status : " + MsgDataStatus + ", short Addr : " + MsgDataShAddr + ", Lenght : " + MsgDataLenght)
+	if self.ListOfDevices[MsgDataShAddr]['Status']!="inDB" :
+		self.ListOfDevices[MsgDataShAddr]['Status']="8043"
+	if int(MsgDataLenght,16)>0 :
+		MsgDataEp=MsgData[10:12]
+		MsgDataProfile=MsgData[12:16]
+		MsgDataDeviceId=MsgData[16:20]
+		MsgDataBField=MsgData[20:22]
+		MsgDataInClusterCount=MsgData[22:24]
+		Domoticz.Debug("Decode8043 - Reception Simple descriptor response : EP : " + MsgDataEp + ", Profile : " + MsgDataProfile + ", Device Id : " + MsgDataDeviceId + ", Bit Field : " + MsgDataBField)
+		Domoticz.Debug("Decode8043 - Reception Simple descriptor response : In Cluster Count : " + MsgDataInClusterCount)
+		i=1
+		if int(MsgDataInClusterCount,16)>0 :
+			while i <= int(MsgDataInClusterCount,16) :
+				MsgDataCluster=MsgData[24+((i-1)*4):24+(i*4)]
+				if MsgDataCluster not in self.ListOfDevices[MsgDataShAddr]['Ep'][MsgDataEp] :
+					self.ListOfDevices[MsgDataShAddr]['Ep'][MsgDataEp][MsgDataCluster]={}
+				Domoticz.Debug("Decode8043 - Reception Simple descriptor response : Cluster in: " + MsgDataCluster)
+				MsgDataCluster=""
+				i=i+1
+		MsgDataOutClusterCount=MsgData[24+(int(MsgDataInClusterCount,16)*4):26+(int(MsgDataInClusterCount,16)*4)]
+		Domoticz.Debug("Decode8043 - Reception Simple descriptor response : Out Cluster Count : " + MsgDataOutClusterCount)
+		i=1
+		if int(MsgDataOutClusterCount,16)>0 :
+			while i <= int(MsgDataOutClusterCount,16) :
+				MsgDataCluster=MsgData[24+((i-1)*4):24+(i*4)]
+				if MsgDataCluster not in self.ListOfDevices[MsgDataShAddr]['Ep'][MsgDataEp] :
+					self.ListOfDevices[MsgDataShAddr]['Ep'][MsgDataEp][MsgDataCluster]={}
+				Domoticz.Debug("Decode8043 - Reception Simple descriptor response : Cluster out: " + MsgDataCluster)
+				MsgDataCluster=""
+				i=i+1
+
 
 def Decode8045(self, MsgData) : # Reception Active endpoint response
 	MsgDataSQN=MsgData[0:2]
@@ -589,15 +636,15 @@ def Decode8045(self, MsgData) : # Reception Active endpoint response
 	MsgDataEPlist=MsgData[10:len(MsgData)]
 	Domoticz.Debug("Decode8045 - Reception Active endpoint response : SQN : " + MsgDataSQN + ", Status " + MsgDataStatus + ", short Addr " + MsgDataShAddr + ", EP count " + MsgDataEpCount + ", Ep list " + MsgDataEPlist)
 	OutEPlist=""
-	if DeviceExist(self, MsgDataShAddr)==False :
-		if self.ListOfDevices[MsgDataShAddr]['Status']!="inDB" :
-			self.ListOfDevices[MsgDataShAddr]['Status']="8045"
-		for i in MsgDataEPlist :
-			OutEPlist+=i
-			if len(OutEPlist)==2 :
-				if OutEPlist not in self.ListOfDevices[MsgDataShAddr]['Ep'] :
-					self.ListOfDevices[MsgDataShAddr]['Ep'][OutEPlist]={}
-					OutEPlist=""
+	DeviceExist(self, MsgDataShAddr)
+	if self.ListOfDevices[MsgDataShAddr]['Status']!="inDB" :
+		self.ListOfDevices[MsgDataShAddr]['Status']="8045"
+	for i in MsgDataEPlist :
+		OutEPlist+=i
+		if len(OutEPlist)==2 :
+			if OutEPlist not in self.ListOfDevices[MsgDataShAddr]['Ep'] :
+				self.ListOfDevices[MsgDataShAddr]['Ep'][OutEPlist]={}
+				OutEPlist=""
 	
 def Decode8101(self, MsgData) :  # Default Response
 	MsgDataSQN=MsgData[0:2]
@@ -634,291 +681,77 @@ def Decode8401(self, MsgData) : # Reception Zone status change notification
 	MsgSrcEp=MsgData[2:4]
 	MsgClusterData=MsgData[16:18]
 		
-def CreateDomoDevice(self, nbrdevices, Addr, Ep) :
-	DeviceID=Addr #int(Addr,16)
-	Type=GetType(self, Addr, Ep)
-	Domoticz.Debug("CreateDomoDevice - Device ID : " + str(DeviceID) + " Device EP : " + str(Ep) + " Type : " + str(Type) )
-	if Type=="Temp/Hum/Baro" :  # Detecteur temp/hum/baro
-		typename="Temp+Hum+Baro"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Temp+Hum"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+1, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Temperature"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+2, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Humidity"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+3, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Barometer"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+4, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+def CreateDomoDevice(self, DeviceID) :
+	#DeviceID=Addr #int(Addr,16)
+	for Ep in self.ListOfDevices[DeviceID]['Ep'] :
+		Type=GetType(self, DeviceID, Ep).split("/")
+		Domoticz.Debug("CreateDomoDevice - Device ID : " + str(DeviceID) + " Device EP : " + str(Ep) + " Type : " + str(Type) )
+		for t in Type :
+			if t=="Temp" : # Detecteur temp	
+				typename="Temperature"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
 
-	if Type=="Temp/Hum" : # Detecteur temp/humi 
-		typename="Temp+Hum"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Temperature"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+1, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Humidity"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+2, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="Humi" : # Detecteur hum	
+				typename="Humidity"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
 
-	if Type=="Temp" : # Detecteur temp	
-		typename="Temperature"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+1, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="Baro" : # Detecteur Baro
+				typename="Barometer"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
 
-	if Type=="Humi" : # Detecteur hum	
-		typename="Humidity"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+2, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="Door": # capteur ouverture/fermeture xiaomi
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73 , Switchtype=2 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
 
-	if Type=="Baro" : # Detecteur Baro
-		typename="Barometer"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices+4, TypeName=typename, Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="Motion" :  # detecteur de presence
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73 , Switchtype=8 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
 
-		
-	if Type=="Door": # capteur ouverture/fermeture xiaomi
-		typename="Switch"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=73 , Switchtype=2 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		
-	if Type=="Occu" :  # detecteur de presence
-		typename="Switch"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=73 , Switchtype=8 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="MSwitch"  :  # interrupteur
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Options = {"LevelActions": "||||", "LevelNames": "Off|1 Click|2 Clicks|3 Clicks|4 Clicks", "LevelOffHidden": "true", "SelectorStyle": "0","Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(Type) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=62 , Switchtype=18, Options = Options).Create()
 
-	if Type=="MSwi"  :  # interrupteur
-		typename="Switch"		
-		Options = {"LevelActions": "||||", "LevelNames": "Off|1 Click|2 Clicks|3 Clicks|4 Clicks", "LevelOffHidden": "true", "SelectorStyle": "0","Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(Type) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=62 , Switchtype=18, Options = Options).Create()
-		
-	if Type=="DSwi"  :  # interrupteur double
-		typename="Switch"		
-		Options = {"LevelActions": "|||", "LevelNames": "Off|Left Click|Right Click|Both Click", "LevelOffHidden": "true", "SelectorStyle": "0","Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(Type) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=62 , Switchtype=18, Options = Options).Create()
-		
-	if Type=="smok" :  # detecteur de fumee
-		typename="Switch"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=73 , Switchtype=5 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="DSwitch"  :  # interrupteur double
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Options = {"LevelActions": "|||", "LevelNames": "Off|Left Click|Right Click|Both Click", "LevelOffHidden": "true", "SelectorStyle": "0","Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(Type) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=62 , Switchtype=18, Options = Options).Create()
 
-	if Type=="Lumi" :  # Lux sensors 
-		typename="Lux"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=246, Subtype=1 , Switchtype=0 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
+			if t=="Smoke" :  # detecteur de fumee
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73 , Switchtype=5 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
 
-	if Type=="SSwi":  # inter sans fils 1 touche 86sw1 xiaomi
-		typename="Switch"
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=73 , Switchtype=9 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		
-	if Type=="XCub" :  # Xiaomi Magic Cube
-		#typename="Text"
-		#Domoticz.Device(DeviceID=str(DeviceID),Name="lumi.sensor_cube-text" + " - " + str(DeviceID), Unit=nbrdevices, Type=243, Subtype=19 , Switchtype=0 , Options={"Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}).Create()
-		typename="Switch"		
-		Options = {"LevelActions": "||||||||", "LevelNames": "Off|Shake|Slide|90°|Clockwise|Tap|Move|Free Fall|Anti Clockwise|180°", "LevelOffHidden": "true", "SelectorStyle": "0","Zigate":str(self.ListOfDevices[Addr]), "TypeName":typename}
-		Domoticz.Device(DeviceID=str(DeviceID),Name=str(Type) + " - " + str(DeviceID), Unit=nbrdevices+1, Type=244, Subtype=62 , Switchtype=18, Options = Options).Create()
-		
-def MajDomoDevice(self,Addr,clusterID,Ep,value) :
+			if t=="Lux" :  # Lux sensors 
+				typename="Lux"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=246, Subtype=1 , Switchtype=0 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
+
+			if t=="Switch":  # inter sans fils 1 touche 86sw1 xiaomi
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73 , Switchtype=9 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
+
+			if t=="XCub" :  # Xiaomi Magic Cube
+				#typename="Text"
+				#Domoticz.Device(DeviceID=str(DeviceID),Name="lumi.sensor_cube-text" + " - " + str(DeviceID), Unit=nbrdevices, Type=243, Subtype=19 , Switchtype=0 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}).Create()
+				typename="Switch"
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Options = {"LevelActions": "||||||||", "LevelNames": "Off|Shake|Slide|90°|Clockwise|Tap|Move|Free Fall|Anti Clockwise|180°", "LevelOffHidden": "true", "SelectorStyle": "0","Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":typename}
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(Type) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=62 , Switchtype=18, Options = Options).Create()
+
+
+
+
+def MajDomoDevice(self,Addr,Ep,clusterID,value) :
 	Domoticz.Debug("MajDomoDevice - Device ID : " + str(Addr) + " - Device EP : " + str(Ep) + " - Type : " + str(clusterID)  + " - Value : " + str(value) )
-	x=0
-	nbrdevices=1
-	DeviceID=Addr #int(Addr,16)
-	for x in Devices:
-		if Devices[x].DeviceID == str(DeviceID) : 
-			DOptions = Devices[x].Options
-			DType=DOptions['devices_type']
-			Dtypename=DOptions['typename']
-			if DType=="lumi.weather" : #temp+hum+baro xiaomi
-				if Type==Dtypename=="Temperature" :  # temperature
-					#Devices[x].Update(nValue = 0,sValue = str(value))	
-					UpdateDevice(x,0,str(value))				
-				if Type==Dtypename=="Humidity" :   # humidite
-					#Devices[x].Update(nValue = int(value), sValue = "0")	
-					UpdateDevice(x,int(value),"0")				
-				if Type==Dtypename=="Barometer" :  # barometre
-					CurrentnValue=Devices[x].nValue
-					CurrentsValue=Devices[x].sValue
-					Domoticz.Debug("MajDomoDevice baro CurrentsValue : " + CurrentsValue)
-					SplitData=CurrentsValue.split(";")
-					valueBaro='%s;%s' % (value,SplitData[0])
-					#Devices[x].Update(nValue = 0,sValue = str(valueBaro))	
-					UpdateDevice(x,0,str(valueBaro))				
-				if Dtypename=="Temp+Hum+Baro" :
-					if Type=="Temperature" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice temp CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s;%s;%s'	% (str(value) ,  SplitData[1] , SplitData[2] , SplitData[3] , SplitData[4])
-						Domoticz.Debug("MajDomoDevice temp NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))		
-						UpdateDevice(x,0,str(NewSvalue))									
-					if Type=="Humidity" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice hum CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s;%s;%s'	% (SplitData[0], str(value) , SplitData[2] , SplitData[3] , SplitData[4])
-						Domoticz.Debug("MajDomoDevice hum NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))		
-						UpdateDevice(x,0,str(NewSvalue))									
-					if Type=="Barometer" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice baro CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s;%s;%s'	% (SplitData[0], SplitData[1] , SplitData[2] , str(value) , SplitData[3])
-						Domoticz.Debug("MajDomoDevice bar NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))		
-						UpdateDevice(x,0,str(NewSvalue))									
-				if Dtypename=="Temp+Hum" : #temp+hum xiaomi
-					if Type=="Temperature" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice temp CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s'	% (str(value), SplitData[1] , SplitData[2])
-						Domoticz.Debug("MajDomoDevice temp NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))			
-						UpdateDevice(x,0,str(NewSvalue))								
-					if Type=="Humidity" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice hum CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s'	% (SplitData[0], str(value) , SplitData[2])
-						Domoticz.Debug("MajDomoDevice hum NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))	
-						UpdateDevice(x,0,str(NewSvalue))				
-	
-			if DType=="lumi.sensor_ht" :
-				if Type==Dtypename=="Temperature" :
-					#Devices[x].Update(nValue = 0,sValue = str(value))
-					UpdateDevice(x,0,str(value))
-				if Type==Dtypename=="Humidity" :
-					#Devices[x].Update(nValue = int(value), sValue = "0")
-					UpdateDevice(x,int(value),"0")
-				#if Dtypename=="Temp+Hum" :
-					#Domoticz.Device(DeviceID=str(DeviceID),Name=str(typename) + " - " + str(DeviceID), Unit=nbrdevices, TypeName=typename, options={"EP":Ep, "devices_type": str(Type), "typename":str(typename)}).Create()				
-				if Dtypename=="Temp+Hum" :
-					if Type=="Temperature" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice temp CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s'	% (str(value), SplitData[1] , SplitData[2])
-						Domoticz.Debug("MajDomoDevice temp NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))		
-						UpdateDevice(x,0,str(NewSvalue))				
-					if Type=="Humidity" :
-						CurrentnValue=Devices[x].nValue
-						CurrentsValue=Devices[x].sValue
-						Domoticz.Debug("MajDomoDevice hum CurrentsValue : " + CurrentsValue)
-						SplitData=CurrentsValue.split(";")
-						NewSvalue='%s;%s;%s'	% (SplitData[0], str(value) , SplitData[2])
-						Domoticz.Debug("MajDomoDevice hum NewSvalue : " + NewSvalue)
-						#Devices[x].Update(nValue = 0,sValue = str(NewSvalue))
-						UpdateDevice(x,0,str(NewSvalue))		
-
-			if DType=="lumi.sensor_magnet.aq2" or DType=="lumi.sensor_magnet" :  # detecteur ouverture/fermeture Xiaomi
-				if Type==Dtypename :
-					if value == "01" :
-						state="Open"
-					elif value == "00" :
-						state="Closed"
-					#Devices[x].Update(nValue = int(value),sValue = str(state))
-					UpdateDevice(x,int(value),str(state))
-				
-
-			if DType=="lumi.sensor_86sw1" or DType=="lumi.sensor_smoke" or DType=="lumi.sensor_motion" :  # detecteur de presence / interrupteur / detecteur de fumée
-				if Type==Dtypename=="Switch" :
-					if value == "01" :
-						state="On"
-					elif value == "00" :
-						state="Off"
-					#Devices[x].Update(nValue = int(value),sValue = str(state))
-					UpdateDevice(x,int(value),str(state))
-					
-					
-			if DType=="lumi.sensor_switch" or DType=="lumi.sensor_switch.aq2"  :  # interrupteur xiaomi rond et carre
-				if Type==Dtypename :
-					if Type=="Switch" :
-						if value == "01" :
-							state="10"
-						elif value == "02" :
-							state="20"
-						elif value == "03" :
-							state="30"
-						elif value == "04" :
-							state="40"
-						#Devices[x].Update(nValue = int(value),sValue = str(state))
-						UpdateDevice(x,int(value),str(state))
-						
-						
-			if DType=="lumi.sensor_86sw2"   :  # inter 2 touches xiaomi 86sw2
-				if Type==Dtypename :
-					if Type=="Switch" :
-						if Ep == "01" :
-							if value == "01" :
-								state="10"
-								data="01"
-						elif Ep == "02" :
-							if value == "01" :
-								state="20"
-								data="02"
-						elif Ep == "03" :
-							if value == "01" :
-								state="30"
-								data="03"
-						#Devices[x].Update(nValue = int(data),sValue = str(state))
-						UpdateDevice(x,int(data),str(state))
-						
-						
-						
-			if DType=="lumi.sensor_cube"   :  # Xiaomi Magic Cube
-				if Type==Dtypename :
-					if Type=="Switch" :
-						if Ep == "02" :
-							if value == "0000" : #shake
-								state="10"
-								data="01"
-						
-							elif value == "0204" or value == "0200" or value == "0203" or value == "0201" or value == "0202" or value == "0205": #tap
-								state="50"
-								data="05"
-							
-							elif value == "0103" or value == "0100" or value == "0104" or value == "0101" or value == "0102" or value == "0105": #Slide
-								state="20"
-								data="02"
-							
-							elif value == "0003" : #Free Fall
-								state="70"
-								data="07"
-								
-							elif value >= "0004" and value <= "0059": #90°
-								state="30"
-								data="03"
-								
-							elif value >= "0060" : #180°
-								state="90"
-								data="09"
-					# elif Type=="Switch" : #rotation
-						# elif MsgClusterId=="000c":
-							# if Ep == "03" :
-								# if value == "40404040" or value=="41414141" or value=="42424242" or value=="43434343" : #clockwise
-								  # state="40"
-								  # data="04"
-						
-							# # elif value == "0204" or value == "0200": #tap
-								# # state="50"
-								# # data="05"
-								
-							#Devices[x].Update(nValue = int(data),sValue = str(state))
-							UpdateDevice(x,int(data),str(state))
-
-			if DType=="lumi.sensor_motion.aq2":  # detecteur de luminosite
-				if Type==Dtypename :
-					if Type=="Lux" :
-						#Devices[x].Update(nValue = 0 ,sValue = str(value))
-						UpdateDevice(x,0,str(value))
-				elif Type==Dtypename :
-					if Type=="Switch" :
-						if value == "01" :
-							state="On"
-						elif value == "00" :
-							state="Off"
-						Devices[x].Update(nValue = int(value),sValue = str(state))
-
 
 						
 def ResetDevice(Type) :
@@ -954,6 +787,7 @@ def DeviceExist(self, Addr) :
 		self.ListOfDevices[Addr]['Model']={}
 		self.ListOfDevices[Addr]['Ep']={}
 		self.ListOfDevices[Addr]['MacCapa']={}
+		self.ListOfDevices[Addr]['IEEE']={}
 		return False
 
 def getChecksum(msgtype,length,datas) :
@@ -1122,22 +956,23 @@ def GetType(self, Addr, Ep) :
 	else :
 		Type=""
 		for cluster in self.ListOfDevices[Addr]['Ep'][Ep] :
+			if Type != "" and Type[:1]!="/" :
+				Type+="/"
 			if cluster=="0405" :
 				Type+="Humi"
-			if cluster=="0406" :
-				Type+="Occu"
-			if cluster=="0400" :
-				Type+="Lumi"
-			if cluster=="0012" or cluster=="000c" :
-				Type+="XCub"
-			if cluster=="0403" :
+			elif cluster=="0406" :
+				Type+="Motion"
+			elif cluster=="0400" :
+				Type+="Lux"
+			elif cluster=="0403" :
 				Type+="Baro"
-			if cluster=="0402" :
+			elif cluster=="0402" :
 				Type+="Temp"
-			if cluster=="0006" :
-				Type+="SSwi"
-			Type+="/"
-		self.DeviceConf[self.ListOfDevices[Addr]['Model']]['Type']=Type
+			elif cluster=="0006" :
+				Type+="Switch"
+			elif cluster=="0500" :
+				Type+="Door"
+		self.ListOfDevices[Addr]['Type']=Type
 	return Type
 			
 			
