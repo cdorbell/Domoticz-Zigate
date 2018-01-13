@@ -201,7 +201,7 @@ class BasePlugin:
 								CreateDomoDevice(self, key)
 
 		ResetDevice("Motion",5)
-		WriteDeviceList(self, 20)
+		WriteDeviceList(self, 200)
 
 		if (ZigateConn.Connected() != True):
 			ZigateConn.Connect()
