@@ -19,9 +19,16 @@
 		<param field="Mode3" label="Erase Persistent Data ( !!! réassociation de tous les devices obligatoirs !!! ): " width="75px">
 			<options>
 				<option label="True" value="True"/>
-				<option label="False" value="False"  default="true" />
+				<option label="False" value="False" default="true" />
 			</options>
 		</param>
+		<param field="Mode4" label="Manual Devices" width="75px">
+			<options>
+				<option label="False" value="False" default="true" />
+				<option label="Switch" value="Switch"/>
+			</options>
+		</param>
+		<param field="Mode5" label="Device ID & EP (format : ID-EP, ID compris entre 0000 et ffff, et EP entre 01 et 09) " width="200px"/>
 		<param field="Mode6" label="Debug" width="75px">
 			<options>
 				<option label="True" value="Debug"/>
@@ -41,6 +48,7 @@ class BasePlugin:
 
 	def __init__(self):
 		self.ListOfDevices = {}  # {DevicesAddresse : { status : status_de_detection, data : {ep list ou autres en fonctions du status}}, DevicesAddresse : ...}
+		self.HBcount=0
 		return
 
 	def onStart(self):
@@ -64,7 +72,6 @@ class BasePlugin:
 			ID = Devices[x].DeviceID
 			self.ListOfDevices[ID]={}
 			self.ListOfDevices[ID]=eval(Devices[x].Options['Zigate'])
-		
 		#Import DeviceConf.txt
 		with open(Parameters["HomeFolder"]+"DeviceConf.txt", 'r') as myfile:
 			tmpread=myfile.read().replace('\n', '')
@@ -75,8 +82,19 @@ class BasePlugin:
 			tmpread2=myfile2.read().replace('\n', '')
 			self.DeviceList=eval(tmpread2)
 			Domoticz.Debug("DeviceList.txt = " + str(eval(tmpread2)))
-			
+		if Parameters["Mode4"] != "False":
+			tmpMD=Parameters["Mode5"].split("-")
+			MDiD=tmpMD[0]
+			MDEP=tmpMD[1]
+			DeviceExist(self, MDiD)
+			self.ListOfDevices[MDiD]['Ep'][MDEP]={}
+			self.ListOfDevices[MDiD]['Ep'][MDEP]["0006"]={}
+			self.ListOfDevices[MDiD]['RIA']=10
+		
+		
+		
 	def onStop(self):
+		ZigateConn.Disconnect()
 		Domoticz.Log("onStop called")
 
 	def onConnect(self, Connection, Status, Description):
@@ -120,9 +138,6 @@ class BasePlugin:
 		Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
 
 	def onDisconnect(self, Connection):
-		with open(Parameters["HomeFolder"]+"DeviceList.txt", 'w') as myfile2:
-			myfile2.write(self.ListOfDevices)
-			Domoticz.Debug("Write DeviceList.txt = " + str(self.ListOfDevices))
 		Domoticz.Log("onDisconnect called")
 
 	def onHeartbeat(self):
@@ -155,22 +170,38 @@ class BasePlugin:
 				self.ListOfDevices[key]['Heartbeat']="0"
 				self.ListOfDevices[key]['Status']="8045"
 		
-			if (RIA>=10 or self.ListOfDevices[key]['Model']!= {}) and status != "inDB" :
-				#creer le device ds domoticz en se basant sur les clusterID ou le Model si il est connu
-				IsCreated=False
-				x=0
-				nbrdevices=0
-				for x in Devices:
-					if Devices[x].DeviceID == str(key) :
-						IsCreated = True
-						Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
-				if IsCreated == False :
-					Domoticz.Debug("HearBeat - creating device id : " + str(key))
-					CreateDomoDevice(self, key)
+			if status != "inDB" :
+				if (RIA>=10 or self.ListOfDevices[key]['Model']!= {}) :
+					#creer le device ds domoticz en se basant sur les clusterID ou le Model si il est connu
+					IsCreated=False
+					x=0
+					nbrdevices=0
+					for x in Devices:
+						if Devices[x].DeviceID == str(key) :
+							IsCreated = True
+							Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
+					if IsCreated == False :
+						Domoticz.Debug("HearBeat - creating device id : " + str(key))
+						CreateDomoDevice(self, key)
 
+				if self.ListOfDevices[key]['MacCapa']=="8e" : 
+					if self.ListOfDevices[key]['ProfileID']=="c05e" :
+						if self.ListOfDevices[key]['ZDeviceID']=="0220" :
+							# exemple ampoule Tradfi
+							self.ListOfDevices[key]['Model']="Ampoule.Tradfi"
+							IsCreated=False
+							x=0
+							nbrdevices=0
+							for x in Devices:
+								if Devices[x].DeviceID == str(key) :
+									IsCreated = True
+									Domoticz.Debug("HearBeat - Devices already exist. Unit=" + str(x))
+							if IsCreated == False :
+								Domoticz.Debug("HearBeat - creating device id : " + str(key))
+								CreateDomoDevice(self, key)
 
 		ResetDevice("Motion",5)
-
+		WriteDeviceList(self, 20)
 
 		if (ZigateConn.Connected() != True):
 			ZigateConn.Connect()
@@ -221,7 +252,7 @@ def DumpConfigToLog():
 		Domoticz.Debug("Device nValue:	" + str(Devices[x].nValue))
 		Domoticz.Debug("Device sValue:   '" + Devices[x].sValue + "'")
 		Domoticz.Debug("Device LastLevel: " + str(Devices[x].LastLevel))
-		Domoticz.Debug("Device options: " + str(Devices[x].Options))
+		Domoticz.Debug("Device Options: " + str(Devices[x].Options))
 	return
 
 
@@ -588,7 +619,9 @@ def Decode8043(self, MsgData) : # Reception Simple descriptor response
 	if int(MsgDataLenght,16)>0 :
 		MsgDataEp=MsgData[10:12]
 		MsgDataProfile=MsgData[12:16]
+		self.ListOfDevices[MsgDataShAddr]['ProfileID']=MsgDataProfile
 		MsgDataDeviceId=MsgData[16:20]
+		self.ListOfDevices[MsgDataShAddr]['ZDeviceID']=MsgDataDeviceId
 		MsgDataBField=MsgData[20:22]
 		MsgDataInClusterCount=MsgData[22:24]
 		Domoticz.Debug("Decode8043 - Reception Simple descriptor response : EP : " + MsgDataEp + ", Profile : " + MsgDataProfile + ", Device Id : " + MsgDataDeviceId + ", Bit Field : " + MsgDataBField)
@@ -667,6 +700,7 @@ def Decode8401(self, MsgData) : # Reception Zone status change notification
 	MsgSrcAddr=MsgData[10:14]
 	MsgSrcEp=MsgData[2:4]
 	MsgClusterData=MsgData[16:18]
+	MajDomoDevice(self, MsgSrcAddr, MsgSrcEp, "0006", MsgClusterData)
 		
 def CreateDomoDevice(self, DeviceID) :
 	#DeviceID=Addr #int(Addr,16)
@@ -730,8 +764,15 @@ def CreateDomoDevice(self, DeviceID) :
 
 			if t=="Smoke" :  # detecteur de fumee (v1) xiaomi
 				self.ListOfDevices[DeviceID]['Status']="inDB"
-				Domoticz.Device(DeviceID=str(DeviceID),Name=str(t) + " - " + str(DeviceID), Unit=nbrdevices, Type=244, Subtype=73 , Switchtype=5 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":t}).Create()
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(t) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73 , Switchtype=5 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":t}).Create()
 
+			if t=="LvlControl" :  # variateur de luminosité
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(t) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73, Switchtype=7 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":t}).Create()
+
+			if t=="ColorControl" :  # variateur de couleur
+				self.ListOfDevices[DeviceID]['Status']="inDB"
+				Domoticz.Device(DeviceID=str(DeviceID),Name=str(t) + " - " + str(DeviceID), Unit=len(Devices)+1, Type=244, Subtype=73 , Switchtype=7 , Options={"Zigate":str(self.ListOfDevices[DeviceID]), "TypeName":t}).Create()
 
 
 def MajDomoDevice(self,DeviceID,Ep,clusterID,value) :
@@ -789,7 +830,7 @@ def MajDomoDevice(self,DeviceID,Ep,clusterID,value) :
 				else :
 					state="0"
 				UpdateDevice(x,int(value),str(state))
-			if Type=="Switch" and Dtypename=="DSwitch" : # double switch avec EP different
+			if Type=="Switch" and Dtypename=="DSwitch" : # double switch avec EP different   ====> a voir pour passer en deux switch simple ...
 				if Ep == "01" :
 					if value == "01" :
 						state="10"
@@ -858,15 +899,17 @@ def DeviceExist(self, Addr) :
 		return True
 	else :  # devices inconnu ds listofdevices et ds db
 		self.ListOfDevices[Addr]={}
+		self.ListOfDevices[Addr]['Ep']={}
 		self.ListOfDevices[Addr]['Status']="004d"
 		self.ListOfDevices[Addr]['Heartbeat']="0"
 		self.ListOfDevices[Addr]['RIA']="0"
 		self.ListOfDevices[Addr]['Battery']={}
 		self.ListOfDevices[Addr]['Model']={}
-		self.ListOfDevices[Addr]['Ep']={}
 		self.ListOfDevices[Addr]['MacCapa']={}
 		self.ListOfDevices[Addr]['IEEE']={}
 		self.ListOfDevices[Addr]['Type']={}
+		self.ListOfDevices[Addr]['ProfileID']={}
+		self.ListOfDevices[Addr]['ZDeviceID']={}
 		return False
 
 def getChecksum(msgtype,length,datas) :
@@ -1068,6 +1111,22 @@ def TypeFromCluster(cluster):
 		TypeFromCluster="XCube"
 	elif cluster=="000c" :
 		TypeFromCluster="XCube"
+	elif cluster=="0008" :
+		TypeFromCluster="LvlControl"
+	elif cluster=="0300" :
+		TypeFromCluster="ColorControl"
 	else :
 		TypeFromCluster=""
 	return TypeFromCluster
+
+def WriteDeviceList(self, count):
+	if self.HBcount>=count :
+		with open(Parameters["HomeFolder"]+"DeviceList.txt", 'wt') as file:
+			file.write(str(self.ListOfDevices))
+		Domoticz.Debug("Write DeviceList.txt = " + str(self.ListOfDevices))
+		self.HBcount=0
+	else :
+		Domoticz.Debug("HB count = " + str(self.HBcount))
+		self.HBcount=self.HBcount+1
+
+
